@@ -1,4 +1,6 @@
 streamlit
+onnxruntime
 opencv-python-headless
+numpy
+Pillow
 gdown
-tflite-runtime
