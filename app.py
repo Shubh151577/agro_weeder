@@ -10,9 +10,10 @@ st.set_page_config(page_title="Agrojet Live Weeder", layout="centered")
 st.title("🌱 Agrojet.ai: Live Weeder Detection")
 
 @st.cache_resource
+def load_model_onnx():
     model_path = 'model.onnx'
     if not os.path.exists(model_path):
-        # અહીં મેં તમારા માટે ઓનલાઇન લિંક સેટ કરી છે
+        # ONNX Model Link
         url = 'https://drive.google.com/uc?id=1N8_Yp7q6H1J0K2vM8R-9E5wX6GzL5Qo6' 
         gdown.download(url, model_path, quiet=False)
     
@@ -41,4 +42,4 @@ try:
         else:
             st.error(f"⚠️ આ *નીંદણ (WEED)* છે! ({confidence:.2f}%)")
 except Exception as e:
-    st.info("સર્વર ફાઈલો તૈયાર કરી રહ્યું છે, ૧-૨ મિનિટ રાહ જુઓ...")
+    st.error(f"Error: {e}")
