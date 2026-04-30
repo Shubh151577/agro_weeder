@@ -4,10 +4,10 @@ import cv2
 import numpy as np
 import tensorflow as tf
 
-# RTC સેટિંગ્સ (મોબાઈલ કનેક્શન માટે)
+# Google STUN સર્વર કનેક્શન માટે
 RTC_CONFIGURATION = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
-class VideoTransformer(VideoTransformerBase):
+class AgrojetTransformer(VideoTransformerBase):
     def _init_(self):
         self.model = tf.lite.Interpreter(model_path="model.tflite")
         self.model.allocate_tensors()
@@ -19,39 +19,51 @@ class VideoTransformer(VideoTransformerBase):
         img = frame.to_ndarray(format="bgr24")
         h, w, _ = img.shape
 
-        # પ્રોસેસિંગ માટે ઈમેજ નાની કરવી
+        # AI પ્રોસેસિંગ
         img_resized = cv2.resize(img, (224, 224)) / 255.0
         img_reshaped = np.expand_dims(img_resized.astype(np.float32), axis=0)
 
-        # પ્રેડિક્શન
         self.model.set_tensor(self.input_details[0]['index'], img_reshaped)
         self.model.invoke()
         prediction = self.model.get_tensor(self.output_details[0]['index'])
         
-        result_index = np.argmax(prediction)
-        confidence = np.max(prediction) * 100
-        label = self.labels[result_index]
+        res_idx = np.argmax(prediction)
+        conf = np.max(prediction) * 100
+        label = self.labels[res_idx]
 
-        # બોક્સ અને ટેક્સ્ટનો કલર (Crop માટે લીલો, Weed માટે લાલ)
-        color = (0, 255, 0) if label == 'PAK (Crop)' else (0, 0, 255)
+        # કલર સેટિંગ: Weed માટે લાલ (Red), Crop માટે લીલો (Green)
+        color = (0, 0, 255) if label == 'WEED (Nindan)' else (0, 255, 0)
         
-        # લાઈવ સ્ક્રીન પર બોક્સ બનાવવું
-        cv2.rectangle(img, (50, 50), (w-50, h-50), color, 4)
-        cv2.putText(img, f"{label} ({confidence:.1f}%)", (60, 100), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 3)
+        # લાઈવ બોક્સ અને ટેક્સ્ટ
+        cv2.rectangle(img, (20, 20), (w-20, h-20), color, 6)
+        cv2.putText(img, f"Agrojet: {label} ({conf:.1f}%)", (30, 70), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
 
         return img
 
-st.title("🌱 Agrojet.ai Live Scanner")
-st.write("લાઈવ નીંદણ શોધવા માટે 'Start' બટન દબાવો")
+st.title("🌱 Agrojet.ai: Live Field Scanner")
+st.write("નીંદણ શોધવા માટે 'Start' બટન દબાવો")
 
-# બેક કેમેરો સેટ કરવા માટે 'facingMode': 'environment'
+# સાઉન્ડ માટેનું સેટિંગ
+weed_alert_html = """
+<audio id="weed_audio" src="https://www.soundjay.com/buttons/beep-01a.mp3" preload="auto"></audio>
+<script>
+function playWeedSound() {
+    document.getElementById('weed_audio').play();
+}
+</script>
+"""
+st.components.v1.html(weed_alert_html, height=0)
+
+# લાઈવ વિડિયો સ્ટ્રીમર
 webrtc_streamer(
     key="agrojet-scanner",
-    video_transformer_factory=VideoTransformer,
+    video_transformer_factory=AgrojetTransformer,
     rtc_configuration=RTC_CONFIGURATION,
-    media_stream_constraints={"video": {"facingMode": "environment"}, "audio": False},
+    media_stream_constraints={
+        "video": {"facingMode": "environment"}, # આનાથી બેક કેમેરો ખુલશે
+        "audio": False
+    },
 )
 
-# સાઉન્ડ અને વાઈબ્રેશન માટે નીચે મેસેજ
-st.info("નોંધ: નીંદણ દેખાય ત્યારે લાલ બોક્સ અને સાઉન્ડ એલર્ટ આવશે.")
+st.info("💡 ટિપ: ખેતરમાં સ્કેનિંગ કરતી વખતે લાલ બોક્સ દેખાય તો ત્યાં નીંદણ છે.")
