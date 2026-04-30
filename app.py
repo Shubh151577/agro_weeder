@@ -1,55 +1,59 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
-import cv2
 import numpy as np
+import cv2
 import tensorflow as tf
+from PIL import Image
+import os
 
-RTC_CONFIGURATION = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+# પેજ સેટઅપ
+st.set_page_config(page_title="Agrojet Smart Scanner", layout="centered")
+st.title("🌱 Agrojet.ai: Smart Weeder")
 
-class AgrojetTransformer(VideoTransformerBase):
-    def _init_(self):
-        self.model = tf.lite.Interpreter(model_path="model.tflite")
-        self.model.allocate_tensors()
-        self.input_details = self.model.get_input_details()
-        self.output_details = self.model.get_output_details()
-        self.labels = ['PAK (Crop)', 'WEED (Nindan)']
-        self.frame_count = 0 # Frame count rakho
+# મોડેલ લોડિંગ
+@st.cache_resource
+def load_agro_model():
+    model_path = 'model.tflite'
+    if not os.path.exists(model_path):
+        st.error("મોડેલ ફાઈલ મળી નથી!")
+        return None
+    interpreter = tf.lite.Interpreter(model_path=model_path)
+    interpreter.allocate_tensors()
+    return interpreter
 
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        self.frame_count += 1
+interpreter = load_agro_model()
 
-        # Darek 5-mi frame par j AI chlavo (Movement smooth krva mate)
-        if self.frame_count % 5 == 0:
-            small_img = cv2.resize(img, (224, 224))
-            input_data = np.expand_dims(small_img.astype(np.float32) / 255.0, axis=0)
-            self.model.set_tensor(self.input_details[0]['index'], input_data)
-            self.model.invoke()
-            prediction = self.model.get_tensor(self.output_details[0]['index'])
-            
-            res_idx = np.argmax(prediction)
-            self.current_label = self.labels[res_idx]
-            self.current_conf = np.max(prediction) * 100
+if interpreter:
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
 
-        # Boxes hamesha screen pr dekhase
-        if hasattr(self, 'current_label'):
-            color = (0, 0, 255) if self.current_label == 'WEED (Nindan)' else (0, 255, 0)
-            h, w, _ = img.shape
-            cv2.rectangle(img, (20, 20), (w-20, h-20), color, 4)
-            cv2.putText(img, f"{self.current_label}: {self.current_conf:.1f}%", (30, 60), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+    # કેમેરા ઇનપુટ (આ હેંગ નહીં થાય)
+    img_file_buffer = st.camera_input("ખેતર સ્કેન કરવા માટે ફોટો પાડો")
 
-        return img
+    if img_file_buffer is not None:
+        # ઈમેજ પ્રોસેસિંગ
+        img = Image.open(img_file_buffer)
+        img_array = np.array(img.convert('RGB'), dtype=np.float32)
+        
+        # સાઈઝ સેટ કરવી
+        img_resized = cv2.resize(img_array, (224, 224)) / 255.0
+        img_reshaped = np.expand_dims(img_resized, axis=0)
 
-st.title("🌱 Agrojet.ai: Real-time Optimized Scanner")
+        # AI પ્રેડિક્શન
+        interpreter.set_tensor(input_details[0]['index'], img_reshaped)
+        interpreter.invoke()
+        prediction = interpreter.get_tensor(output_details[0]['index'])
+        
+        result_index = np.argmax(prediction)
+        confidence = np.max(prediction) * 100
+        labels = ['PAK (Crop)', 'WEED (Nindan)']
+        final_label = labels[result_index]
 
-webrtc_streamer(
-    key="agrojet-fast",
-    video_transformer_factory=AgrojetTransformer,
-    rtc_configuration=RTC_CONFIGURATION,
-    media_stream_constraints={
-        "video": {"facingMode": "environment", "width": 480, "height": 640},
-        "audio": False
-    },
-    async_processing=True, # Background ma AI chlavse jethi video na atkse
-)
+        st.divider()
+        if final_label == 'WEED (Nindan)' and confidence > 70:
+            st.error(f"⚠️ નીંદણ (WEED) મળ્યું! ({confidence:.1f}%)")
+            # મોબાઈલ વાઈબ્રેશન
+            st.components.v1.html("<script>window.navigator.vibrate(500);</script>")
+        else:
+            st.success(f"✅ પાક (PAK) સુરક્ષિત છે. ({confidence:.1f}%)")
+
+st.info("💡 લાઈવ સ્કેનિંગમાં હેંગ થવાની સમસ્યાને કારણે આ પદ્ધતિ સૌથી વધુ સ્ટેબલ છે.")
