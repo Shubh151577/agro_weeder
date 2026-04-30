@@ -10,7 +10,6 @@ st.set_page_config(page_title="Agrojet Live Weeder", layout="centered")
 st.title("🌱 Agrojet.ai: Live Weeder Detection")
 
 @st.cache_resource
-def load_model_onnx():
     model_path = 'model.onnx'
     if not os.path.exists(model_path):
         # અહીં મેં તમારા માટે ઓનલાઇન લિંક સેટ કરી છે
