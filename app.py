@@ -4,56 +4,118 @@ import cv2
 import tensorflow as tf
 from PIL import Image
 import os
+from datetime import datetime
+from io import BytesIO
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
 
-# પેજ સેટઅપ
-st.set_page_config(page_title="Agrojet Smart Scanner", layout="centered")
-st.title("🌱 Agrojet.ai: Smart Weeder")
+st.set_page_config(page_title="Agrojet Smart Scanner", layout="wide")
+
+# --- CSS for Professional Look ---
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stButton>button { width: 100%; background-color: #4CAF50; color: white; border-radius: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.title("🌱 Agrojet.ai: Smart Weeder & History")
 
 # મોડેલ લોડિંગ
 @st.cache_resource
 def load_agro_model():
     model_path = 'model.tflite'
-    if not os.path.exists(model_path):
-        st.error("મોડેલ ફાઈલ મળી નથી!")
-        return None
+    if not os.path.exists(model_path): return None
     interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
     return interpreter
 
 interpreter = load_agro_model()
 
-if interpreter:
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
+# હિસ્ટ્રી સ્ટોર કરવા માટે session_state
+if 'history' not in st.session_state:
+    st.session_state['history'] = []
 
-    # કેમેરા ઇનપુટ (આ હેંગ નહીં થાય)
-    img_file_buffer = st.camera_input("ખેતર સ્કેન કરવા માટે ફોટો પાડો")
+# --- PDF બનાવવાનું ફંક્શન ---
+def generate_pdf(data):
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    p.setFont("Helvetica-Bold", 16)
+    p.drawString(100, 750, "Agrojet.ai - Field Scan Report")
+    p.setFont("Helvetica", 12)
+    p.drawString(100, 730, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    
+    y = 700
+    p.drawString(100, y, "Time | Label | Confidence")
+    y -= 20
+    p.line(100, y, 500, y)
+    y -= 20
 
-    if img_file_buffer is not None:
-        # ઈમેજ પ્રોસેસિંગ
+    for item in reversed(data):
+        if y < 50: # નવી પેજ માટે
+            p.showPage()
+            y = 750
+        text = f"{item['time']} | {item['label']} | {item['conf']}%"
+        p.drawString(100, y, text)
+        y -= 20
+        
+    p.save()
+    return buffer.getvalue()
+
+# --- મેઈન લેઆઉટ ---
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("📸 Live Scan")
+    img_file_buffer = st.camera_input("Scan Field")
+
+    if img_file_buffer is not None and interpreter:
+        # AI Processing
         img = Image.open(img_file_buffer)
         img_array = np.array(img.convert('RGB'), dtype=np.float32)
-        
-        # સાઈઝ સેટ કરવી
         img_resized = cv2.resize(img_array, (224, 224)) / 255.0
         img_reshaped = np.expand_dims(img_resized, axis=0)
 
-        # AI પ્રેડિક્શન
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
         interpreter.set_tensor(input_details[0]['index'], img_reshaped)
         interpreter.invoke()
         prediction = interpreter.get_tensor(output_details[0]['index'])
         
-        result_index = np.argmax(prediction)
-        confidence = np.max(prediction) * 100
         labels = ['PAK (Crop)', 'WEED (Nindan)']
-        final_label = labels[result_index]
+        res_idx = np.argmax(prediction)
+        conf = np.max(prediction) * 100
+        label = labels[res_idx]
+        current_time = datetime.now().strftime("%H:%M:%S")
 
-        st.divider()
-        if final_label == 'WEED (Nindan)' and confidence > 70:
-            st.error(f"⚠️ નીંદણ (WEED) મળ્યું! ({confidence:.1f}%)")
-            # મોબાઈલ વાઈબ્રેશન
+        # હિસ્ટ્રીમાં એડ કરવું
+        st.session_state['history'].append({
+            "time": current_time,
+            "label": label,
+            "conf": f"{conf:.1f}"
+        })
+
+        if label == 'WEED (Nindan)':
+            st.error(f"⚠️ {label} મળ્યું! ({conf:.1f}%)")
             st.components.v1.html("<script>window.navigator.vibrate(500);</script>")
         else:
-            st.success(f"✅ પાક (PAK) સુરક્ષિત છે. ({confidence:.1f}%)")
+            st.success(f"✅ {label} ({conf:.1f}%)")
 
-st.info("💡 લાઈવ સ્કેનિંગમાં હેંગ થવાની સમસ્યાને કારણે આ પદ્ધતિ સૌથી વધુ સ્ટેબલ છે.")
+with col2:
+    st.subheader("📜 History Logs")
+    if st.session_state['history']:
+        # PDF ડાઉનલોડ બટન
+        pdf_data = generate_pdf(st.session_state['history'])
+        st.download_button(label="📥 Download PDF Report", data=pdf_data, 
+                           file_name="agrojet_report.pdf", mime="application/pdf")
+        
+        # હિસ્ટ્રી ટેબલ
+        for item in reversed(st.session_state['history']):
+            color = "🔴" if "WEED" in item['label'] else "🟢"
+            st.write(f"{color} *{item['time']}* - {item['label']} ({item['conf']}%)")
+    else:
+        st.info("હજુ સુધી કોઈ સ્કેનિંગ કર્યું નથી.")
+
+if st.button("🗑️ Clear History"):
+    st.session_state['history'] = []
+    st.rerun()
