@@ -1,48 +1,55 @@
 import streamlit as st
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 import cv2
 import numpy as np
 import tensorflow as tf
-from PIL import Image
-import time
 
-st.set_page_config(page_title="Agrojet.ai Live", layout="centered")
-st.title("🌱 Agrojet.ai: Real-time Smart Scanner")
+RTC_CONFIGURATION = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
-# મોડેલ લોડ કરો
-@st.cache_resource
-def load_model():
-    interpreter = tf.lite.Interpreter(model_path="model.tflite")
-    interpreter.allocate_tensors()
-    return interpreter
+class AgrojetTransformer(VideoTransformerBase):
+    def _init_(self):
+        self.model = tf.lite.Interpreter(model_path="model.tflite")
+        self.model.allocate_tensors()
+        self.input_details = self.model.get_input_details()
+        self.output_details = self.model.get_output_details()
+        self.labels = ['PAK (Crop)', 'WEED (Nindan)']
+        self.frame_count = 0 # Frame count rakho
 
-interpreter = load_model()
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        self.frame_count += 1
 
-# વિડિયો સ્ટ્રીમિંગ માટે સાદો અને ફાસ્ટ રસ્તો
-img_file_buffer = st.camera_input("Scan your field")
+        # Darek 5-mi frame par j AI chlavo (Movement smooth krva mate)
+        if self.frame_count % 5 == 0:
+            small_img = cv2.resize(img, (224, 224))
+            input_data = np.expand_dims(small_img.astype(np.float32) / 255.0, axis=0)
+            self.model.set_tensor(self.input_details[0]['index'], input_data)
+            self.model.invoke()
+            prediction = self.model.get_tensor(self.output_details[0]['index'])
+            
+            res_idx = np.argmax(prediction)
+            self.current_label = self.labels[res_idx]
+            self.current_conf = np.max(prediction) * 100
 
-if img_file_buffer is not None:
-    # પ્રોસેસિંગ સ્પીડ વધારવા માટે
-    img = Image.open(img_file_buffer)
-    img_array = np.array(img.convert('RGB'), dtype=np.float32)
-    
-    # AI ડિટેક્શન
-    img_resized = cv2.resize(img_array, (224, 224)) / 255.0
-    img_reshaped = np.expand_dims(img_resized, axis=0)
+        # Boxes hamesha screen pr dekhase
+        if hasattr(self, 'current_label'):
+            color = (0, 0, 255) if self.current_label == 'WEED (Nindan)' else (0, 255, 0)
+            h, w, _ = img.shape
+            cv2.rectangle(img, (20, 20), (w-20, h-20), color, 4)
+            cv2.putText(img, f"{self.current_label}: {self.current_conf:.1f}%", (30, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
-    interpreter.set_tensor(input_details[0]['index'], img_reshaped)
-    interpreter.invoke()
-    prediction = interpreter.get_tensor(output_details[0]['index'])
-    
-    labels = ['PAK (Crop)', 'WEED (Nindan)']
-    res_idx = np.argmax(prediction)
-    conf = np.max(prediction) * 100
+        return img
 
-    # રિઝલ્ટ મુજબ વાઈબ્રેશન અને સાઉન્ડ
-    if labels[res_idx] == 'WEED (Nindan)' and conf > 75:
-        st.error(f"🚨 નીંદણ મળ્યું! ({conf:.1f}%)")
-        # મોબાઈલ વાઈબ્રેશન માટે JS
-        st.components.v1.html("<script>window.navigator.vibrate(500);</script>")
-    else:
-        st.success(f"✅ આ પાક છે. ({conf:.1f}%)")
+st.title("🌱 Agrojet.ai: Real-time Optimized Scanner")
+
+webrtc_streamer(
+    key="agrojet-fast",
+    video_transformer_factory=AgrojetTransformer,
+    rtc_configuration=RTC_CONFIGURATION,
+    media_stream_constraints={
+        "video": {"facingMode": "environment", "width": 480, "height": 640},
+        "audio": False
+    },
+    async_processing=True, # Background ma AI chlavse jethi video na atkse
+)
