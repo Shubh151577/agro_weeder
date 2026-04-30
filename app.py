@@ -1,62 +1,48 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
 import cv2
 import numpy as np
 import tensorflow as tf
+from PIL import Image
+import time
 
-# RTC સેટિંગ્સ - મોબાઈલ માટે સ્ટેબલ કનેક્શન
-RTC_CONFIGURATION = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+st.set_page_config(page_title="Agrojet.ai Live", layout="centered")
+st.title("🌱 Agrojet.ai: Real-time Smart Scanner")
 
-class AgrojetTransformer(VideoTransformerBase):
-    def _init_(self):
-        # મોડેલ એક જ વાર લોડ થશે
-        self.model = tf.lite.Interpreter(model_path="model.tflite")
-        self.model.allocate_tensors()
-        self.input_details = self.model.get_input_details()
-        self.output_details = self.model.get_output_details()
-        self.labels = ['PAK (Crop)', 'WEED (Nindan)']
+# મોડેલ લોડ કરો
+@st.cache_resource
+def load_model():
+    interpreter = tf.lite.Interpreter(model_path="model.tflite")
+    interpreter.allocate_tensors()
+    return interpreter
 
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        
-        # સ્પીડ વધારવા માટે ફ્રેમની સાઈઝ ઘટાડવી
-        small_img = cv2.resize(img, (224, 224))
-        input_data = np.expand_dims(small_img.astype(np.float32) / 255.0, axis=0)
+interpreter = load_model()
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
-        # AI પ્રેડિક્શન
-        self.model.set_tensor(self.input_details[0]['index'], input_data)
-        self.model.invoke()
-        prediction = self.model.get_tensor(self.output_details[0]['index'])
-        
-        res_idx = np.argmax(prediction)
-        conf = np.max(prediction) * 100
-        label = self.labels[res_idx]
+# વિડિયો સ્ટ્રીમિંગ માટે સાદો અને ફાસ્ટ રસ્તો
+img_file_buffer = st.camera_input("Scan your field")
 
-        # કલર અને બોક્સ (ગ્રીન - પાક, રેડ - નીંદણ)
-        color = (0, 0, 255) if label == 'WEED (Nindan)' else (0, 255, 0)
-        
-        # ઓવરલે (ડ્રોઈંગ)
-        h, w, _ = img.shape
-        cv2.rectangle(img, (10, 10), (w-10, h-10), color, 4)
-        cv2.putText(img, f"{label}: {conf:.1f}%", (20, 50), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+if img_file_buffer is not None:
+    # પ્રોસેસિંગ સ્પીડ વધારવા માટે
+    img = Image.open(img_file_buffer)
+    img_array = np.array(img.convert('RGB'), dtype=np.float32)
+    
+    # AI ડિટેક્શન
+    img_resized = cv2.resize(img_array, (224, 224)) / 255.0
+    img_reshaped = np.expand_dims(img_resized, axis=0)
 
-        return img
+    interpreter.set_tensor(input_details[0]['index'], img_reshaped)
+    interpreter.invoke()
+    prediction = interpreter.get_tensor(output_details[0]['index'])
+    
+    labels = ['PAK (Crop)', 'WEED (Nindan)']
+    res_idx = np.argmax(prediction)
+    conf = np.max(prediction) * 100
 
-st.title("🌱 Agrojet.ai: Real-time Field Scanner")
-
-webrtc_streamer(
-    key="agrojet-live",
-    video_transformer_factory=AgrojetTransformer,
-    rtc_configuration=RTC_CONFIGURATION,
-    media_stream_constraints={
-        "video": {
-            "facingMode": "environment",
-            "frameRate": {"ideal": 10, "max": 15} # ફ્રેમ રેટ કંટ્રોલ કરવાથી હેંગ નહીં થાય
-        },
-        "audio": False
-    },
-    async_processing=True, # બેકગ્રાઉન્ડ પ્રોસેસિંગ ચાલુ કરવું
-)
-
-st.warning("નોંધ: જો વિડિયો હેંગ થાય, તો એકવાર પેજ Refresh કરીને ફરી 'Start' દબાવો.")
+    # રિઝલ્ટ મુજબ વાઈબ્રેશન અને સાઉન્ડ
+    if labels[res_idx] == 'WEED (Nindan)' and conf > 75:
+        st.error(f"🚨 નીંદણ મળ્યું! ({conf:.1f}%)")
+        # મોબાઈલ વાઈબ્રેશન માટે JS
+        st.components.v1.html("<script>window.navigator.vibrate(500);</script>")
+    else:
+        st.success(f"✅ આ પાક છે. ({conf:.1f}%)")
