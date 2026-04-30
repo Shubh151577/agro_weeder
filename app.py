@@ -11,15 +11,6 @@ from reportlab.lib.pagesizes import letter
 
 st.set_page_config(page_title="Agrojet Smart Scanner", layout="wide")
 
-st.markdown("""
-    <style>
-    .main { background-color: #f1f8e9; }
-    .stButton>button { background-color: #2e7d32; color: white; height: 3em; font-size: 20px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-st.title("🌱 Agrojet.ai: Real-time Field Buddy")
-
 # મોડેલ લોડિંગ
 @st.cache_resource
 def load_agro_model():
@@ -34,32 +25,61 @@ interpreter = load_agro_model()
 if 'history' not in st.session_state:
     st.session_state['history'] = []
 
-# --- PDF Function ---
-def generate_pdf(data):
+# --- એડવાન્સ PDF રિપોર્ટ (તમારા એક્ઝામ્પલ મુજબ) ---
+def generate_detailed_pdf(history_data):
     buffer = BytesIO()
-    p = canvas.Canvas(buffer, pagesize=letter)
-    p.drawString(100, 750, f"Agrojet.ai Report - {datetime.now().strftime('%Y-%m-%d')}")
-    y = 700
-    for item in reversed(data[-20:]): # છેલ્લા 20 રેકોર્ડ
-        p.drawString(100, y, f"{item['time']} | {item['label']} | Conf: {item['conf']}%")
-        y -= 20
-    p.save()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    
+    c.setFont("Helvetica-Bold", 18)
+    c.drawCentredString(width/2, height - 50, "Agrojet.ai: Smart Weeder Report")
+    
+    y_position = height - 100
+    
+    for item in reversed(history_data[-10:]): # છેલ્લા 10 રેકોર્ડ
+        if y_position < 150:
+            c.showPage()
+            y_position = height - 50
+        
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(50, y_position, f"Time: {item['time']}")
+        
+        # નીંદણની વિગતો (તમારા ફોટા મુજબ)
+        c.setFont("Helvetica", 11)
+        if "WEED" in item['label']:
+            c.setFillColorRGB(0.8, 0, 0) # Red for weed
+            c.drawString(50, y_position - 20, "Sthanik Naam: Dungalo (Wild Onion)")
+            c.drawString(50, y_position - 35, "Vaigyanik Naam: Asphodelus tenuifolius")
+            c.drawString(50, y_position - 50, f"Confidence: {item['conf']}%")
+        else:
+            c.setFillColorRGB(0, 0.5, 0) # Green for crop
+            c.drawString(50, y_position - 20, "Label: Surakshit Pak (Safe Crop)")
+            c.drawString(50, y_position - 35, f"Confidence: {item['conf']}%")
+        
+        c.setFillColorRGB(0, 0, 0)
+        c.line(50, y_position - 60, 550, y_position - 60)
+        y_position -= 80
+        
+    c.save()
     return buffer.getvalue()
 
-# --- Layout ---
-col1, col2 = st.columns([2, 1])
+# --- Main Interface ---
+st.title("🌱 Agrojet.ai: Smart Field Buddy")
+
+col1, col2 = st.columns([1.5, 1])
 
 with col1:
-    st.subheader("📷 Smart Scanner")
-    # કેમેરા ઇનપુટ - 'environment' એટલે પાછળનો કેમેરો
-    img_file_buffer = st.camera_input("Scan", help="કૃપા કરીને બેક કેમેરો વાપરો", label_visibility="collapsed")
+    st.subheader("📷 Scan Field")
+    # Back Camera માટે 'environment' સેટિંગ
+    img_file = st.camera_input("Take Photo", help="Use back camera for better results")
 
-    if img_file_buffer is not None and interpreter:
-        img = Image.open(img_file_buffer)
+    if img_file and interpreter:
+        img = Image.open(img_file)
         img_array = np.array(img.convert('RGB'), dtype=np.float32)
         img_resized = cv2.resize(img_array, (224, 224)) / 255.0
         img_reshaped = np.expand_dims(img_resized, axis=0)
 
+        # AI Prediction
         input_details = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
         interpreter.set_tensor(input_details[0]['index'], img_reshaped)
@@ -70,28 +90,26 @@ with col1:
         res_idx = np.argmax(prediction)
         conf = np.max(prediction) * 100
         
-        # જામફળને ભૂલથી નીંદણ ના ગણે તે માટે Confidence 85% થી વધુ હોય તો જ WEED ગણવું
-        final_label = labels[res_idx]
-        if final_label == 'WEED (Nindan)' and conf < 85:
-            final_label = 'PAK (Crop)'
+        # Jamfal (Crop) ને બચાવવા માટે 85% Confidence લોજિક
+        label = labels[res_idx]
+        if label == 'WEED (Nindan)' and conf < 85:
+            label = 'PAK (Crop)'
 
-        current_time = datetime.now().strftime("%H:%M:%S")
-        st.session_state['history'].append({"time": current_time, "label": final_label, "conf": f"{conf:.1f}"})
+        current_time = datetime.now().strftime("%I:%M %p")
+        st.session_state['history'].append({"time": current_time, "label": label, "conf": f"{conf:.1f}"})
 
-        if final_label == 'WEED (Nindan)':
-            st.error(f"🔴 નીંદણ મળ્યું! ({conf:.1f}%)")
-            st.components.v1.html("<script>window.navigator.vibrate(200);</script>")
+        if label == 'WEED (Nindan)':
+            st.error(f"🔴 {label} Detected! ({conf:.1f}%)")
         else:
-            st.success(f"🟢 આ પાક છે. ({conf:.1f}%)")
+            st.success(f"🟢 {label} Safe. ({conf:.1f}%)")
 
 with col2:
-    st.subheader("📜 History Logs")
+    st.subheader("📜 History & Report")
     if st.session_state['history']:
-        pdf_data = generate_pdf(st.session_state['history'])
-        st.download_button("📩 Download PDF", data=pdf_data, file_name="agrojet_report.pdf")
-        for item in reversed(st.session_state['history'][-10:]):
-            st.write(f"*{item['time']}*: {item['label']} ({item['conf']}%)")
-
-if st.button("Clear Logs"):
-    st.session_state['history'] = []
-    st.rerun()
+        pdf = generate_detailed_pdf(st.session_state['history'])
+        st.download_button("📥 Download Detailed PDF", data=pdf, file_name="Agrojet_Report.pdf")
+        
+        for item in reversed(st.session_state['history']):
+            st.write(f"*{item['time']}* - {item['label']} ({item['conf']}%)")
+    else:
+        st.info("No scans yet.")
